@@ -2,4 +2,3 @@ ruff.toml
 matplotlibrc
 
 .venv
-solutions
