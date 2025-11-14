@@ -60,97 +60,119 @@ def plot_best_response_value_function(row_matrix: np.ndarray, step_size: float) 
     plt.savefig('./best_response_value_function.png')
 
 
+import numpy as np
+from scipy.optimize import linprog
+
+
 def verify_support(
     matrix: np.ndarray, row_support: np.ndarray, col_support: np.ndarray
 ) -> np.ndarray | None:
     """Construct a system of linear equations to check whether there
     exists a candidate for a Nash equilibrium for the given supports.
-
+    
     The reference implementation uses `scipy.optimize.linprog`
     with the default solver -- 'highs'. You can find more information at
     https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linprog.html
-
+    
     Parameters
     ----------
     matrix : np.ndarray
-        A payoff matrix of one of the players
+        A payoff matrix of one of the players (row player's payoffs)
     row_support : np.ndarray
-        The row player's support
+        Array of indices indicating the row player's support
     col_support : np.ndarray
-        The column player's support
-
+        Array of indices indicating the column player's support
+    
     Returns
     -------
     np.ndarray | None
-        The opponent's strategy, if it exists, otherwise `None`
+        The column player's strategy (full vector), if it exists, otherwise `None`
     """
-    num_rows, num_cols = matrix.shape
+    n_rows, n_cols = matrix.shape
     
-    # We need to find a strategy for the opponent (column player) such that
-    # all actions in the row support have equal expected payoff
+    # We're looking for a column player's strategy such that:
+    # 1. All row actions in row_support get the same expected payoff
+    # 2. All row actions NOT in row_support get at most that payoff
+    # 3. Column player only plays actions in col_support
     
-    # Set up the linear programming problem
-    # Variables: column strategy probabilities + auxiliary variable for the common payoff
-    # We have |col_support| variables for probabilities + 1 for common payoff
-    num_vars = len(col_support) + 1
+    # Variables: [q_1, q_2, ..., q_m, u]
+    # where q_j are probabilities for columns in col_support, u is the common payoff
+    n_support = len(col_support)
+    n_vars = n_support + 1
     
-    # Objective: we don't really care about optimization, just feasibility
-    # So we can minimize 0 (or any constant)
-    c = np.zeros(num_vars)
+    if n_support == 0:
+        return None
     
-    # Equality constraints:
-    # 1. All actions in row support must have equal expected payoff
-    # 2. Column strategy probabilities must sum to 1
+    # Objective: minimize 0 (feasibility problem)
+    c = np.zeros(n_vars)
     
+    # === Equality Constraints ===
     A_eq = []
     b_eq = []
     
-    # For each pair of actions in row support, their expected payoffs must be equal
-    row_support_list = list(row_support)
-    for i in range(len(row_support_list) - 1):
-        action1 = row_support_list[i]
-        action2 = row_support_list[i + 1]
-        
-        # Expected payoff difference should be 0
-        constraint = np.zeros(num_vars)
-        for j, col_action in enumerate(col_support):
-            constraint[j] = matrix[action1, col_action] - matrix[action2, col_action]
-        
+    # 1. Probabilities sum to 1
+    prob_sum = np.zeros(n_vars)
+    prob_sum[:n_support] = 1
+    A_eq.append(prob_sum)
+    b_eq.append(1)
+    
+    # 2. All actions in row_support must yield the same expected payoff u
+    # For each row i in row_support: sum_j matrix[i,j] * q_j = u
+    # Rewritten: sum_j matrix[i,j] * q_j - u = 0
+    for i in row_support:
+        constraint = np.zeros(n_vars)
+        for idx, j in enumerate(col_support):
+            constraint[idx] = matrix[i, j]
+        constraint[-1] = -1  # -u
         A_eq.append(constraint)
         b_eq.append(0)
     
-    # Column strategy probabilities must sum to 1
-    constraint = np.zeros(num_vars)
-    constraint[:len(col_support)] = 1
-    A_eq.append(constraint)
-    b_eq.append(1)
+    A_eq = np.array(A_eq)
+    b_eq = np.array(b_eq)
     
-    # Convert to numpy arrays
-    A_eq = np.array(A_eq) if A_eq else None
-    b_eq = np.array(b_eq) if b_eq else None
+    # === Inequality Constraints ===
+    A_ub = []
+    b_ub = []
     
-    # Bounds: probabilities must be non-negative, auxiliary variable unbounded
-    bounds = [(0, 1) for _ in range(len(col_support))] + [(None, None)]
+    # Actions NOT in row_support must yield payoff <= u
+    # For row i not in support: sum_j matrix[i,j] * q_j <= u
+    # Rewritten: sum_j matrix[i,j] * q_j - u <= 0
+    row_support_set = set(row_support)
+    for i in range(n_rows):
+        if i not in row_support_set:
+            constraint = np.zeros(n_vars)
+            for idx, j in enumerate(col_support):
+                constraint[idx] = matrix[i, j]
+            constraint[-1] = -1  # -u
+            A_ub.append(constraint)
+            b_ub.append(0)
     
-    try:
-        # Solve the linear program
-        result = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
-        
-        if result.success:
-            # Extract the column strategy (excluding the auxiliary variable)
-            col_strategy = result.x[:len(col_support)]
-            
-            # Create full strategy vector
-            full_strategy = np.zeros(num_cols)
-            for i, col_action in enumerate(col_support):
-                full_strategy[col_action] = col_strategy[i]
-            
-            return full_strategy.astype(np.float32)
-        else:
-            return None
-            
-    except Exception:
+    if len(A_ub) > 0:
+        A_ub = np.array(A_ub)
+        b_ub = np.array(b_ub)
+    else:
+        A_ub = None
+        b_ub = None
+    
+    # Bounds: probabilities in [0, 1], utility unbounded
+    bounds = [(0, 1) for _ in range(n_support)] + [(None, None)]
+    
+    # Solve
+    result = linprog(c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, 
+                     bounds=bounds, method='highs')
+    
+    if not result.success:
         return None
+    
+    # Extract probabilities and construct full strategy vector
+    probs = result.x[:n_support]
+    
+    # Create full column strategy (length = number of columns)
+    full_strategy = np.zeros(n_cols, dtype=np.float64)
+    for idx, j in enumerate(col_support):
+        full_strategy[j] = probs[idx]
+    
+    return full_strategy
 
 
 def support_enumeration(
