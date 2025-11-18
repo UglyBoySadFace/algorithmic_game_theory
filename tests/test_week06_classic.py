@@ -10,7 +10,7 @@ from pytest import FixtureRequest
 from pytest_regressions.ndarrays_regression import NDArraysRegressionFixture
 
 import week03
-import week05
+import week06
 from utils import cache_data_stream_per_function, parameterize_classical_tests
 
 NUM_GAMES = 9
@@ -40,23 +40,22 @@ def zero_sum_data_stream(request: FixtureRequest, rng: np.random.Generator) -> G
     return parameterize_classical_tests(True, rng)
 
 
-@pytest.mark.parametrize('zero_sum_data_stream', range(NUM_ZERO_SUM_GAMES), indirect=True)
-def test_double_oracle(
-    zero_sum_data_stream: Generator,
+@pytest.mark.parametrize('general_sum_data_stream', range(NUM_GAMES), indirect=True)
+def test_regret_minimization(
+    general_sum_data_stream: Generator,
     ndarrays_regression: NDArraysRegressionFixture,
     request: FixtureRequest,
-    rng: np.random.Generator,
 ) -> None:
-    row_matrix, col_matrix, *_ = next(zero_sum_data_stream)
+    row_matrix, col_matrix, *_ = next(general_sum_data_stream)
 
-    strategies, supports = week05.double_oracle(row_matrix, 1e-5, rng)
+    strategies = week06.regret_minimization(row_matrix, col_matrix, num_iters=5)
     exploitability = week03.compute_exploitability(row_matrix, col_matrix, *strategies[-1])
 
-    for (row_strategy, col_strategy), (row_support, col_support) in zip(strategies, supports):
+    assert len(strategies) == 5, 'Incorrect number of strategies returned!'
+
+    for row_strategy, col_strategy in strategies:
         assert row_strategy.dtype == np.float64, 'Incorrect dtype!'
         assert col_strategy.dtype == np.float64, 'Incorrect dtype!'
-        assert row_support.dtype == np.int64, 'Incorrect dtype!'
-        assert col_support.dtype == np.int64, 'Incorrect dtype!'
 
         assert np.isclose(np.sum(row_strategy), 1.0), 'Strategy does not sum to 1!'
         assert np.isclose(np.sum(col_strategy), 1.0), 'Strategy does not sum to 1!'
@@ -65,11 +64,9 @@ def test_double_oracle(
 
     ndarrays_regression.check(
         {
-            'row_strategy': strategies[-1][0],
-            'col_strategy': strategies[-1][1],
-            'row_support': supports[-1][0],
-            'col_support': supports[-1][1],
-            'exploitability': exploitability,
+            'row_strategy': np.round(strategies[-1][0], 8),
+            'col_strategy': np.round(strategies[-1][1], 8),
+            'exploitability': np.round(exploitability, 8),
         },
-        f'{request.node.originalname}{request.node.callspec.indices["zero_sum_data_stream"]}',
+        f'{request.node.originalname}{request.node.callspec.indices["general_sum_data_stream"]}',
     )
