@@ -33,7 +33,7 @@ def evaluate_general_sum(
     # Expected utility for column player: row_strategy^T * col_matrix * col_strategy
     col_utility = np.dot(row_strategy, np.dot(col_matrix, col_strategy))
     
-    return np.array([row_utility, col_utility], dtype=np.float32)
+    return np.array([row_utility, col_utility], dtype=np.float64)
 
 
 def evaluate_zero_sum(
@@ -62,7 +62,7 @@ def evaluate_zero_sum(
     # Column player utility is the negative of row player utility
     col_utility = -row_utility
     
-    return np.array([row_utility, col_utility], dtype=np.float32)
+    return np.array([row_utility, col_utility], dtype=np.float64)
 
 
 def calculate_best_response_against_row(
@@ -90,7 +90,7 @@ def calculate_best_response_against_row(
     best_action = np.argmax(expected_payoffs)
     
     # Create pure strategy (one-hot vector)
-    best_response = np.zeros(col_matrix.shape[1], dtype=np.float32)
+    best_response = np.zeros(col_matrix.shape[1], dtype=np.float64)
     best_response[best_action] = 1.0
     
     return best_response
@@ -121,7 +121,7 @@ def calculate_best_response_against_col(
     best_action = np.argmax(expected_payoffs)
     
     # Create pure strategy (one-hot vector)
-    best_response = np.zeros(row_matrix.shape[0], dtype=np.float32)
+    best_response = np.zeros(row_matrix.shape[0], dtype=np.float64)
     best_response[best_action] = 1.0
     
     return best_response
@@ -129,7 +129,7 @@ def calculate_best_response_against_col(
 
 def evaluate_row_against_best_response(
     row_matrix: np.ndarray, col_matrix: np.ndarray, row_strategy: np.ndarray
-) -> np.float32:
+) -> np.float64:
     """Compute the utility of the row player when playing against a best response strategy.
 
     Parameters
@@ -143,7 +143,7 @@ def evaluate_row_against_best_response(
 
     Returns
     -------
-    np.float32
+    np.float64
         The expected utility of the row player
     """
     # Calculate column player's best response against row strategy
@@ -152,12 +152,12 @@ def evaluate_row_against_best_response(
     # Calculate row player's utility against this best response
     row_utility = np.dot(row_strategy, np.dot(row_matrix, col_best_response))
     
-    return np.float32(row_utility)
+    return np.float64(row_utility)
 
 
 def evaluate_col_against_best_response(
     row_matrix: np.ndarray, col_matrix: np.ndarray, col_strategy: np.ndarray
-) -> np.float32:
+) -> np.float64:
     """Compute the utility of the column player when playing against a best response strategy.
 
     Parameters
@@ -171,7 +171,7 @@ def evaluate_col_against_best_response(
 
     Returns
     -------
-    np.float32
+    np.float64
         The expected utility of the column player
     """
     # Calculate row player's best response against column strategy
@@ -180,7 +180,7 @@ def evaluate_col_against_best_response(
     # Calculate column player's utility against this best response
     col_utility = np.dot(row_best_response, np.dot(col_matrix, col_strategy))
     
-    return np.float32(col_utility)
+    return np.float64(col_utility)
 
 
 def find_strictly_dominated_actions(matrix: np.ndarray) -> np.ndarray:
@@ -208,7 +208,7 @@ def find_strictly_dominated_actions(matrix: np.ndarray) -> np.ndarray:
                     dominated_actions.append(i)
                     break  # Once we find a dominating action, we don't need to check others
     
-    return np.array(dominated_actions, dtype=np.int32)
+    return np.array(dominated_actions, dtype=np.int64)
 
 
 def iterated_removal_of_dominated_strategies(
