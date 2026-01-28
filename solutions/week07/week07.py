@@ -250,11 +250,14 @@ def compute_average_strategy(
 ) -> Strategy:
     """Compute a weighted average of a pair of behavioural strategies for a given player.
     
+    This function assumes weights are already reach-probability-weighted if needed.
+    For proper averaging in extensive-form games, weights should be reach probabilities.
+    
     Args:
         strategy1: First strategy (dict mapping infoset_key -> action probabilities)
         strategy2: Second strategy (dict mapping infoset_key -> action probabilities)
-        weight1: Weight for first strategy
-        weight2: Weight for second strategy
+        weight1: Weight for first strategy (should be reach probability)
+        weight2: Weight for second strategy (should be reach probability)
     
     Returns:
         Dict mapping infoset_key -> weighted average action probabilities
@@ -269,84 +272,86 @@ def compute_average_strategy(
         probs2 = strategy2.get(infoset_key, None)
         
         if probs1 is not None and probs2 is not None:
-            # Both strategies have this infoset
+            # Both strategies have this infoset - compute weighted average
+            # The weights should already account for reach probabilities
             avg_probs = weight1 * probs1 + weight2 * probs2
+            total_weight = weight1 + weight2
+            if total_weight > 0:
+                avg_probs = avg_probs / total_weight
+            # Normalize to ensure it's a valid probability distribution
+            prob_sum = np.sum(avg_probs)
+            if prob_sum > 0:
+                avg_probs = avg_probs / prob_sum
         elif probs1 is not None:
-            # Only strategy1 has this infoset
-            avg_probs = weight1 * probs1
+            # Only strategy1 has this infoset - use it directly (already normalized)
+            avg_probs = probs1.copy()
         else:
-            # Only strategy2 has this infoset
-            avg_probs = weight2 * probs2
+            # Only strategy2 has this infoset - use it directly (already normalized)
+            avg_probs = probs2.copy()
         
-        # Normalize to ensure it's a valid probability distribution
-        avg_probs = avg_probs / np.sum(avg_probs)
         average_strategy[infoset_key] = avg_probs
     
     return average_strategy
 
 
-def compute_exploitability(
-    env: KuhnPoker, 
-    strategy_sequence: List[StrategyProfile], 
-    num_players: int = 2
-) -> List[float]:
-    """Compute and plot the exploitability of a sequence of strategy profiles.
+def compute_reach_probabilities(
+    root_node: GameNode,
+    player: int,
+    strategy: Strategy
+) -> Dict[InfosetKey, float]:
+    """Compute reach probabilities for each information set of a player.
     
     Args:
-        env: The game environment
-        strategy_sequence: List of strategy profiles (each is a dict of strategies per player)
-        num_players: Number of players
+        root_node: Root of the game tree
+        player: Player index
+        strategy: Strategy profile for all players
     
     Returns:
-        List of exploitability values
+        Dict mapping infoset_key -> reach probability
     """
-    exploitabilities: List[float] = []
+    reach_probs: Dict[InfosetKey, float] = {}
     
-    for strategies in strategy_sequence:
-        # Build game tree
-        initial_state = env.init(0)
-        root = traverse_tree(env, initial_state)
+    def traverse(node: GameNode, reach_prob: float) -> None:
+        """Recursively compute reach probabilities."""
+        if node.is_terminal:
+            return
         
-        # Compute exploitability for each player
-        total_exploitability = 0.0
+        # Track reach probability for this player's information sets
+        if not node.is_chance and node.player == player and node.infoset_key is not None:
+            if node.infoset_key not in reach_probs:
+                reach_probs[node.infoset_key] = 0.0
+            reach_probs[node.infoset_key] += reach_prob
         
-        for player in range(num_players):
-            # Get opponent strategy
-            opponent = 1 - player if num_players == 2 else None
-            opponent_strategy = strategies.get(opponent, {})
+        # Recurse to children
+        if node.is_chance:
+            # Chance node - use chance probabilities
+            for action in node.legal_actions:
+                prob = node.state.chance_strategy[action]
+                child = node.children[action]
+                traverse(child, reach_prob * prob)
+        else:
+            # Player node - use strategy
+            infoset_key = node.infoset_key
+            if infoset_key in strategy:
+                action_probs = strategy[infoset_key]
+            else:
+                # Uniform if not specified
+                action_probs = np.ones(len(node.legal_actions), dtype=np.float64) / len(node.legal_actions)
             
-            # Compute best response
-            best_response = compute_best_response(root, player, opponent_strategy)
-            
-            # Evaluate player's current strategy against opponent
-            current_value = evaluate(root, strategies)[player]
-            
-            # Evaluate player's best response against opponent
-            br_strategies = strategies.copy()
-            br_strategies[player] = best_response
-            br_value = evaluate(root, br_strategies)[player]
-            
-            # Exploitability contribution from this player
-            exploitability = br_value - current_value
-            total_exploitability += exploitability
-        
-        exploitabilities.append(total_exploitability)
+            for i, action in enumerate(node.legal_actions):
+                prob = action_probs[i] if i < len(action_probs) else 0.0
+                child = node.children[action]
+                # Only multiply by action probability if this is the target player
+                if node.player == player:
+                    traverse(child, reach_prob * prob)
+                else:
+                    traverse(child, reach_prob)
     
-    # Plot
-    plt.figure(figsize=(10, 6))
-    plt.plot(exploitabilities, 'b-', linewidth=2)
-    plt.xlabel('Iteration')
-    plt.ylabel('Exploitability')
-    plt.title('Exploitability over Time')
-    plt.grid(True, alpha=0.3)
-    plt.yscale('log')
-    plt.savefig('./exploitability_extensive_form.png')
-    plt.close()
-    
-    return exploitabilities
+    traverse(root_node, 1.0)
+    return reach_probs
 
 
-def extensive_form_fictitious_play(
+def fictitious_play(
     env: KuhnPoker, 
     num_iters: int = 1000
 ) -> List[StrategyProfile]:
@@ -361,8 +366,9 @@ def extensive_form_fictitious_play(
     """
     num_players: int = 2
     
-    # Initialize cumulative strategies
+    # Initialize cumulative strategies weighted by reach probabilities
     cumulative_strategies: List[Strategy] = [{} for _ in range(num_players)]
+    cumulative_reach_probs: List[Dict[InfosetKey, float]] = [{} for _ in range(num_players)]
     average_strategies_sequence: List[StrategyProfile] = []
     
     for t in range(1, num_iters + 1):
@@ -381,32 +387,59 @@ def extensive_form_fictitious_play(
                 # First iteration - use uniform strategy
                 opponent_avg_strategy = {}
             else:
-                # Average strategy from cumulative
+                # Average strategy from cumulative (weighted by reach probabilities)
                 opponent_avg_strategy = {}
-                for infoset_key, cumulative_probs in cumulative_strategies[opponent].items():
-                    opponent_avg_strategy[infoset_key] = cumulative_probs / (t - 1)
+                for infoset_key in cumulative_strategies[opponent].keys():
+                    cumulative_probs = cumulative_strategies[opponent][infoset_key]
+                    total_reach = cumulative_reach_probs[opponent].get(infoset_key, 1.0)
+                    if total_reach > 0:
+                        opponent_avg_strategy[infoset_key] = cumulative_probs / total_reach
+                    else:
+                        # Fallback to uniform if no reach probability
+                        num_actions = len(cumulative_probs)
+                        opponent_avg_strategy[infoset_key] = np.ones(num_actions) / num_actions
             
             # Compute best response
             best_response = compute_best_response(root, player, opponent_avg_strategy)
             current_strategies[player] = best_response
             
-            # Accumulate strategy
+            # Compute reach probabilities for this player's strategy
+            reach_probs = compute_reach_probabilities(root, player, best_response)
+            
+            # Accumulate strategy weighted by reach probabilities
             for infoset_key, action_probs in best_response.items():
+                reach_prob = reach_probs.get(infoset_key, 1.0)
+                
                 if infoset_key not in cumulative_strategies[player]:
                     cumulative_strategies[player][infoset_key] = np.zeros_like(action_probs)
-                cumulative_strategies[player][infoset_key] += action_probs
+                    cumulative_reach_probs[player][infoset_key] = 0.0
+                
+                # Weight the strategy by its reach probability
+                cumulative_strategies[player][infoset_key] += action_probs * reach_prob
+                cumulative_reach_probs[player][infoset_key] += reach_prob
         
-        # Compute average strategies
+        # Compute average strategies (normalized by cumulative reach probabilities)
         average_strategies = {}
         for player in range(num_players):
             average_strategies[player] = {}
-            for infoset_key, cumulative_probs in cumulative_strategies[player].items():
-                average_strategies[player][infoset_key] = cumulative_probs / t
+            for infoset_key in cumulative_strategies[player].keys():
+                cumulative_probs = cumulative_strategies[player][infoset_key]
+                total_reach = cumulative_reach_probs[player].get(infoset_key, 1.0)
+                if total_reach > 0:
+                    avg_probs = cumulative_probs / total_reach
+                    # Normalize to ensure valid probability distribution
+                    prob_sum = np.sum(avg_probs)
+                    if prob_sum > 0:
+                        avg_probs = avg_probs / prob_sum
+                    average_strategies[player][infoset_key] = avg_probs
+                else:
+                    # Fallback to uniform
+                    num_actions = len(cumulative_probs)
+                    average_strategies[player][infoset_key] = np.ones(num_actions) / num_actions
         
         average_strategies_sequence.append(average_strategies)
     
     return average_strategies_sequence
-
 
 def main() -> None:
     # The implementation of the game is a part of a JAX library called `pgx`.
@@ -419,6 +452,22 @@ def main() -> None:
     # Initialize the environment with a random seed
     state = env.init(0)
 
+    while not (state.terminated or state.truncated):
+        if state.is_chance_node:
+            uniform_strategy = state.legal_action_mask / np.sum(state.legal_action_mask)
+            assert np.allclose(state.chance_strategy, uniform_strategy), (
+                'The chance strategy is not uniform!'
+            )
+
+        print(state.legal_action_mask)
+        # Pick the first legal action
+        action = np.argmax(state.legal_action_mask)
+
+        # Take a step in the environment
+        state = env.step(state, action)
+
+    assert np.sum(state.rewards) == 0, 'The game is not zero-sum!'
+    assert state.terminated or state.truncated, 'The game is not over!'
 
 if __name__ == '__main__':
     main()
