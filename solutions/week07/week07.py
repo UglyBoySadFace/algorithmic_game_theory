@@ -276,6 +276,32 @@ def compute_average_strategy(
     
     return averaged_strategy
 
+
+def collect_infosets(root_node: GameNode) -> Dict[int, Dict[InfosetKey, List[int]]]:
+    """Collect all information sets from the game tree.
+    
+    Args:
+        root_node: Root of the game tree
+    
+    Returns:
+        Dict mapping player -> (infoset_key -> list of legal actions)
+    """
+    infosets_dict = {}
+    
+    def _collect(node):
+        if not node.is_terminal and not node.is_chance and node.infoset_key:
+            p = node.player
+            if p not in infosets_dict:
+                infosets_dict[p] = {}
+            if node.infoset_key not in infosets_dict[p]:
+                infosets_dict[p][node.infoset_key] = node.legal_actions
+        for child in node.children.values():
+            _collect(child)
+    
+    _collect(root_node)
+    return infosets_dict
+
+
 def compute_exploitability(
     env: KuhnPoker,
     strategy_profiles: List[StrategyProfile],
@@ -470,18 +496,7 @@ def fictitious_play(
     root = traverse_tree(env, initial_state)
     
     # Discover all information sets
-    def collect_infosets(node, infosets_dict):
-        if not node.is_terminal and not node.is_chance and node.infoset_key:
-            p = node.player
-            if p not in infosets_dict:
-                infosets_dict[p] = {}
-            if node.infoset_key not in infosets_dict[p]:
-                infosets_dict[p][node.infoset_key] = node.legal_actions
-        for child in node.children.values():
-            collect_infosets(child, infosets_dict)
-    
-    all_infosets = {}
-    collect_infosets(root, all_infosets)
+    all_infosets = collect_infosets(root)
     
     # Initialize cumulative strategies using simple averaging
     # Start with uniform strategies

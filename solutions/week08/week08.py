@@ -341,7 +341,6 @@ def _compute_realization_plan_constraints(
     constraints_list.append(constraint)
     rhs_list.append(1)
     
-    # For each parent that has children, create a flow conservation constraint:
     # r(parent) = sum_children r(child)
     for parent_seq in sequences:
         children = children_by_parent.get(parent_seq, [])
